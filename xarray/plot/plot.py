@@ -341,9 +341,27 @@ def _plot2d(plotfunc):
         # All 2d plots in xarray share this function signature.
         # Method signature below should be consistent.
 
+        import matplotlib.pyplot as plt
+
+        if plotfunc.__name__ is 'geocolormesh':
+            import cartopy.crs as ccrs
+            proj = kwargs.get('projection', ccrs.PlateCarree())
+
+            if row or col:
+                subplot_kws = {} if subplot_kws is None else subplot_kws
+                subplot_kws['projection'] = subplot_kws.pop('projection', proj)
+
+            elif ax is None:
+                ax = plt.axes(projection=proj)
+
         # Handle facetgrids first
         if row or col:
             allargs = locals().copy()
+
+            del allargs['plt']
+            allargs.pop('ccrs', None)
+            allargs.pop('proj', None)
+
             allargs.update(allargs.pop('kwargs'))
 
             # Need the decorated plotting function
@@ -351,7 +369,7 @@ def _plot2d(plotfunc):
 
             return _easy_facetgrid(**allargs)
 
-        import matplotlib.pyplot as plt
+        
 
         # colors is mutually exclusive with cmap
         if cmap and colors:
@@ -553,3 +571,5 @@ def pcolormesh(x, y, z, ax, **kwargs):
         ax.set_ylim(y[0], y[-1])
 
     return ax, primitive
+
+from .mutils import geocolormesh

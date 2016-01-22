@@ -1,0 +1,40 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+#Author: Mathias Hauser
+#Date: 
+
+import matplotlib.pyplot as plt
+
+from .plot import _plot2d, _infer_interval_breaks
+
+@_plot2d
+def geocolormesh(x, y, z, ax, **kwargs):
+    """
+    Pseudocolor plot of 2d DataArray
+
+    Wraps matplotlib.pyplot.pcolormesh
+    """
+
+    import cartopy.crs as ccrs
+
+    proj = kwargs.get('projection', ccrs.PlateCarree())
+    trans = kwargs.get('transform', ccrs.PlateCarree())
+
+    x = _infer_interval_breaks(x)
+    y = _infer_interval_breaks(y)
+
+    primitive = ax.pcolormesh(x, y, z, transform=trans, **kwargs)
+
+    ax.coastlines()
+
+
+
+    ext = x.min(), x.max(), y.min(), y.max()
+    
+    if y.min() == -90 and  y.max() == 90:
+        ext = x.min(), x.max(), y.min() - 0.1, y.max() - 0.1
+
+    ax.set_extent(ext, proj)
+
+    return ax, primitive

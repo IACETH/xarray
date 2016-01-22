@@ -11,3 +11,18 @@ from .conventions import decode_cf
 from .version import version as __version__
 
 from . import tutorial
+
+
+# import mutils
+
+from mutils import read_netcdfs, _average_da, _average_ds
+from mutils import _wrap360
+
+from .mutils import open_cesm
+
+# monkey patch
+DataArray.average = _average_da
+Dataset.average = _average_ds
+
+DataArray.wrap360 = _wrap360
+Dataset.wrap360 = _wrap360
