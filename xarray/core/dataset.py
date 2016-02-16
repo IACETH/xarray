@@ -58,6 +58,16 @@ def _get_virtual_variable(variables, key):
         seasons = np.array(['DJF', 'MAM', 'JJA', 'SON'])
         month = date.month
         data = seasons[(month // 3) % 4]
+    elif var_name == 'doy':
+        # correct doy for leap years and 365-day calendars
+        year = date.year
+        is_leap = (year % 4 == 0) & ((year % 100 != 0) | (year % 400 == 0))
+        doy = date.dayofyear
+        # 59 is the 28. of Fev
+        sel = is_leap & (doy > 59)
+        # subtract 1
+        doy[sel] -= 1
+        data = doy
     else:
         data = getattr(date, var_name)
     return ref_name, var_name, Variable(ref_var.dims, data)
