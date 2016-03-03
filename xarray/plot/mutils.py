@@ -28,12 +28,17 @@ def geocolormesh(x, y, z, ax, **kwargs):
 
     ax.coastlines()
 
-
-
-    ext = x.min(), x.max(), y.min(), y.max()
+    xmin, xmax, ymin, ymax = x.min(), x.max(), y.min(), y.max()
     
-    if y.min() == -90 and  y.max() == 90:
-        ext = x.min(), x.max(), y.min() - 0.1, y.max() - 0.1
+
+
+    if y.min() <= -90 and  y.max() >= 90:
+        ymin, ymax = -89.9, 89.9
+
+    if x.min() % 360 == x.max() % 360:
+        xmin += 0.1
+
+    ext = xmin, xmax, ymin, ymax
 
     ax.set_extent(ext, proj)
 
