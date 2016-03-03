@@ -29,6 +29,20 @@ describing scientific data in widespread use in the Earth sciences:
 .. _netCDF: http://www.unidata.ucar.edu/software/netcdf
 .. _OPeNDAP: http://www.opendap.org/
 
+What is different from the original xray?
+-----------------------------------------
+
+I added some additional functionality:
+
+- time.doy virtual variable. Day of year for no leap calendars.
+- plot.geocolormesh: automatically plots on a cartopy map
+- average function (for Dataset and DataArray): weighted mean
+- wrap360 to change from -180..179 to 0..359 longitude
+- read_netcdfs: read a list of netcdfs and concatenate along a dimensions.
+  The dimension does not need to exist (can be an ensemble).
+- open_cesm: open a cesm netCDF file: uses time_bounds and 
+  rounds lat and lon coordinates
+
 Why xarray?
 -----------
 
