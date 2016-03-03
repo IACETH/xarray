@@ -70,6 +70,61 @@ def read_netcdfs(files, dim, transform_func=None, **kwargs):
 
 # =============================================================================
 
+def read_netcdfs_cesm(files, dim, transform_func=None, **kwargs):
+    """
+    read and combine multiple netcdf files with open_cesm
+
+    Parameters
+    ----------
+    files : string or list of files
+        path with wildchars or iterable of files
+    dim : string
+        dimension along which to combine, does not have to exist in 
+        file (e.g. ensemble)
+    transform_func : function
+        function to apply for individual datasets, see example
+    kwargs : keyword arguments
+        passed to open_cesm
+
+    Returns
+    -------
+    combined : xarray Dataset
+        the combined xarray Dataset with transform_func applied
+
+    Example
+    -------
+    read_netcdfs('/path/*.nc', dim='ens',
+                 transform_func=lambda ds: ds.mean())
+
+    Reference
+    ---------
+    http://xarray.pydata.org/en/stable/io.html#combining-multiple-files
+    """
+
+
+    def process_one_path(path):
+        # use a context manager, to ensure the file gets closed after use
+        with open_cesm(path, **kwargs) as ds:
+            # transform_func should do some sort of selection or
+            # aggregation
+            if transform_func is not None:
+                ds = transform_func(ds)
+            # load all data from the transformed dataset, to ensure we can
+            # use it after closing each original file
+            ds.load()
+            return ds
+
+    if isinstance(files, basestring):
+        paths = sorted(glob(files))
+    else:
+        paths = files
+
+    datasets = [process_one_path(p) for p in paths]
+    combined = concat(datasets, dim)
+    return combined
+
+
+# =============================================================================
 
 def _average_da(self, dim=None, weights=None):
     """

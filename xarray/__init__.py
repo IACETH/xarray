@@ -18,7 +18,7 @@ from . import tutorial
 from mutils import read_netcdfs, _average_da, _average_ds
 from mutils import _wrap360
 
-from .mutils import open_cesm
+from .mutils import open_cesm, read_netcdfs_cesm
 
 # monkey patch
 DataArray.average = _average_da
