@@ -16,7 +16,7 @@ from . import tutorial
 # import mutils
 
 from mutils import read_netcdfs, _average_da, _average_ds
-from mutils import _wrap360
+from mutils import _wrap360, _cos_wgt
 
 from .mutils import open_cesm, read_netcdfs_cesm
 
@@ -26,3 +26,9 @@ Dataset.average = _average_ds
 
 DataArray.wrap360 = _wrap360
 Dataset.wrap360 = _wrap360
+
+DataArray.wrap180 = _wrap180
+Dataset.wrap180 = _wrap180
+
+DataArray.cos_wgt = _cos_wgt
+Dataset.cos_wgt = _cos_wgt

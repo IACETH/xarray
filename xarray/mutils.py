@@ -213,6 +213,43 @@ def _wrap360(self, lon='lon'):
 
 # =============================================================================
 
+def _wrap180(self, lon='lon'):
+    """
+    wrap longitude coordinates to -180..180
+
+    Parameters
+    ----------
+    ds : Dataset
+        object with longitude coordinates
+    lon : string
+        name of the longitude ('lon', 'longitude', ...)
+
+    Returns
+    -------
+    wrapped : Dataset
+        Another dataset array wrapped around.
+    """
+
+    # wrap 0..359 to -180..179
+    sel = self.lon > 180
+
+    lon = np.mod(self[lon][sel], -180)
+    
+    self[lon][sel] = lon
+
+    # sort the data
+    return self.reindex({lon : np.sort(self[lon])})
+
+# =============================================================================
+
+def _cos_wgt(self, lat='lat'):
+    """cosine-weighted latitude"""
+    return np.cos(np.deg2rad(self[lat]))
+
+
+# =============================================================================
+
+
 def open_cesm(filename_or_obj, group=None, decode_cf=True,
               mask_and_scale=True, decode_times=True,
               concat_characters=True, decode_coords=True, engine=None,
