@@ -16,7 +16,7 @@ from . import tutorial
 # import mutils
 
 from mutils import read_netcdfs, _average_da, _average_ds
-from mutils import _wrap360, _cos_wgt
+from mutils import _wrap360, _wrap180, _cos_wgt
 
 from .mutils import open_cesm, read_netcdfs_cesm
 
