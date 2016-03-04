@@ -9,6 +9,7 @@ from ..plot.plot import _PlotMethods
 
 from . import indexing
 from . import groupby
+from . import rolling
 from . import ops
 from . import utils
 from .alignment import align
@@ -64,11 +65,18 @@ def _infer_coords_and_dims(shape, coords, dims):
         if dim not in new_coords:
             new_coords[dim] = default_index_coordinate(dim, size)
 
+    sizes = dict(zip(dims, shape))
     for k, v in new_coords.items():
         if any(d not in dims for d in v.dims):
             raise ValueError('coordinate %s has dimensions %s, but these '
                              'are not a subset of the DataArray '
                              'dimensions %s' % (k, v.dims, dims))
+
+        for d, s in zip(v.dims, v.shape):
+            if s != sizes[d]:
+                raise ValueError('conflicting sizes for dimension %r: '
+                                 'length %s on the data but length %s on '
+                                 'coordinate %r' % (d, sizes[d], s, k))
 
     return new_coords, dims
 
@@ -145,6 +153,7 @@ class DataArray(AbstractArray, BaseDataObject):
         Dictionary for holding arbitrary metadata.
     """
     groupby_cls = groupby.DataArrayGroupBy
+    rolling_cls = rolling.DataArrayRolling
 
     def __init__(self, data, coords=None, dims=None, name=None,
                  attrs=None, encoding=None, fastpath=False):
@@ -252,7 +261,7 @@ class DataArray(AbstractArray, BaseDataObject):
             array.attrs = {}
             return array
 
-        variables = OrderedDict([(str(label), subset(dim, label))
+        variables = OrderedDict([(label, subset(dim, label))
                                  for label in self.indexes[dim]])
         coords = self.coords.to_dataset()
         del coords[dim]
@@ -1177,11 +1186,6 @@ class DataArray(AbstractArray, BaseDataObject):
                 return NotImplemented
             if hasattr(other, 'indexes'):
                 self, other = align(self, other, join=join, copy=False)
-                empty_indexes = [d for d, s in zip(self.dims, self.shape)
-                                 if s == 0]
-                if empty_indexes:
-                    raise ValueError('no overlapping labels for some '
-                                     'dimensions: %s' % empty_indexes)
             other_variable = getattr(other, 'variable', other)
             other_coords = getattr(other, 'coords', None)
 
@@ -1369,6 +1373,65 @@ class DataArray(AbstractArray, BaseDataObject):
     @property
     def imag(self):
         return self._replace(self.variable.imag)
+
+    def dot(self, other):
+        """Perform dot product of two DataArrays along their shared dims.
+        
+        Equivalent to taking taking tensordot over all shared dims.
+
+        Parameters
+        ----------
+        other : DataArray
+            The other array with which the dot product is performed.
+            
+        Returns
+        -------
+        result : DataArray
+            Array resulting from the dot product over all shared dimensions.
+            
+        See also
+        --------
+        np.tensordot(a, b, axes)
+
+        Examples
+        --------
+
+        >>> da_vals = np.arange(6 * 5 * 4).reshape((6, 5, 4))
+        >>> da = DataArray(da_vals, dims=['x', 'y', 'z'])    
+        >>> dm_vals = np.arange(4)
+        >>> dm = DataArray(dm_vals, dims=['z'])
+                
+        >>> dm.dims
+        ('z')
+        >>> da.dims
+        ('x', 'y', 'z')
+
+        >>> dot_result = da.dot(dm)
+        >>> dot_result.dims
+        ('x', 'y')
+        """
+        if isinstance(other, Dataset):
+            raise NotImplementedError('dot products are not yet supported '
+                                      'with Dataset objects.')
+        if not isinstance(other, DataArray):
+            raise TypeError('dot only operates on DataArrays.')
+
+        # sum over the common dims
+        dims = set(self.dims) & set(other.dims)
+        if len(dims) == 0:
+            raise ValueError('DataArrays have no shared dimensions over which '
+                             'to perform dot.')
+
+        self, other = align(self, other, join='inner', copy=False)
+
+        axes = (self.get_axis_num(dims), other.get_axis_num(dims))
+        new_data = ops.tensordot(self.data, other.data, axes=axes)
+
+        new_coords = self.coords.merge(other.coords).drop(dims)
+        new_dims = ([d for d in self.dims if d not in dims] +
+                    [d for d in other.dims if d not in dims])
+
+        return type(self)(new_data, new_coords, new_dims)
 
 # priority most be higher than Variable to properly work with binary ufuncs
 ops.inject_all_ops_and_reduce_methods(DataArray, priority=60)

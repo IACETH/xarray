@@ -7,8 +7,101 @@ What's New
     import numpy as np
     import pandas as pd
     import xray
+    import xarray
     import xarray as xr
     np.random.seed(123456)
+
+.. _whats-new.0.7.2:
+
+v0.7.2 (unreleased)
+-------------------
+
+Enhancements
+~~~~~~~~~~~~
+-xarray version of np.dot :py:meth:`~DataArray.dot`. Performs dot product of 
+two DataArrays along their shared dims
+
+- Rolling window operations on DataArray objects are now supported via a new
+  :py:meth:`xarray.DataArray.rolling` method.
+
+  .. ipython::
+    :verbatim:
+
+    In [1]: import xarray as xr; import numpy as np
+
+    In [2]: arr = xr.DataArray(np.arange(0, 7.5, 0.5).reshape(3, 5),
+                               dims=('x', 'y'))
+
+    In [3]: arr
+    Out[3]:
+    <xarray.DataArray (x: 3, y: 5)>
+    array([[ 0. ,  0.5,  1. ,  1.5,  2. ],
+           [ 2.5,  3. ,  3.5,  4. ,  4.5],
+           [ 5. ,  5.5,  6. ,  6.5,  7. ]])
+    Coordinates:
+      * x        (x) int64 0 1 2
+      * y        (y) int64 0 1 2 3 4
+
+    In [4]: arr.rolling(y=3, min_periods=2).mean()
+    Out[4]:
+    <xarray.DataArray (x: 3, y: 5)>
+    array([[  nan,  0.25,  0.5 ,  1.  ,  1.5 ],
+           [  nan,  2.75,  3.  ,  3.5 ,  4.  ],
+           [  nan,  5.25,  5.5 ,  6.  ,  6.5 ]])
+    Coordinates:
+      * x        (x) int64 0 1 2
+      * y        (y) int64 0 1 2 3 4
+
+Bug fixes
+~~~~~~~~~
+
+.. _whats-new.0.7.1:
+
+v0.7.1 (16 February 2016)
+-------------------------
+
+This is a bug fix release that includes two small, backwards compatible enhancements.
+We recommend that all users upgrade.
+
+Enhancements
+~~~~~~~~~~~~
+
+- Numerical operations now return empty objects on no overlapping labels rather
+  than raising ``ValueError`` (:issue:`739`).
+- :py:class:`~pd.Series` is now supported as valid input to the ``Dataset``
+  constructor (:issue:`740`).
+
+Bug fixes
+~~~~~~~~~
+
+- Restore checks for shape consistency between data and coordinates in the
+  DataArray constructor (:issue:`758`).
+- Single dimension variables no longer transpose as part of a broader
+  ``.transpose``. This  behavior was causing ``pandas.PeriodIndex`` dimensions
+  to lose their type (:issue:`749`)
+- :py:class:`~xarray.Dataset` labels remain as their native type on ``.to_dataset``.
+  Previously they were coerced to strings (:issue:`745`)
+- Fixed a bug where replacing a ``DataArray`` index coordinate would improperly
+  align the coordinate (:issue:`725`).
+- ``DataArray.reindex_like`` now maintains the dtype of complex numbers when
+  reindexing leads to NaN values (:issue:`738`).
+- ``Dataset.rename`` and ``DataArray.rename`` support the old and new names
+  being the same (:issue:`724`).
+- Fix :py:meth:`~xarray.Dataset.from_dataset` for DataFrames with Categorical
+  column and a MultiIndex index (:issue:`737`).
+- Fixes to ensure xarray works properly after the upcoming pandas v0.18 and
+  NumPy v1.11 releases.
+
+Acknowledgments
+~~~~~~~~~~~~~~~
+
+The following individuals contributed to this release:
+
+- Edward Richards
+- Maximilian Roos
+- Rafael Guedes
+- Spencer Hill
+- Stephan Hoyer
 
 .. _whats-new.0.7.0:
 

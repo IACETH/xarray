@@ -7,7 +7,9 @@ from textwrap import dedent
 from xarray import (align, broadcast, Dataset, DataArray,
                     Coordinate, Variable)
 from xarray.core.pycompat import iteritems, OrderedDict
-from . import TestCase, ReturnItem, source_ndarray, unittest, requires_dask
+from xarray.core.common import _full_like
+from . import (TestCase, ReturnItem, source_ndarray, unittest, requires_dask,
+               requires_bottleneck)
 
 
 class TestDataArray(TestCase):
@@ -170,6 +172,12 @@ class TestDataArray(TestCase):
 
         with self.assertRaisesRegexp(TypeError, 'is not a string'):
             DataArray(data, dims=['x', None])
+
+        with self.assertRaisesRegexp(ValueError, 'conflicting sizes for dim'):
+            DataArray([1, 2, 3], coords=[('x', [0, 1])])
+        with self.assertRaisesRegexp(ValueError, 'conflicting sizes for dim'):
+            DataArray([1, 2], coords={'x': [0, 1], 'y': ('x', [1])}, dims='x')
+
 
     def test_constructor_from_self_described(self):
         data = [[-0.1, 21], [0, 2]]
@@ -619,6 +627,14 @@ class TestDataArray(TestCase):
                              dims='x')
         self.assertDataArrayIdentical(lhs, expected)
 
+    def test_coords_replacement_alignment(self):
+        # regression test for GH725
+        arr = DataArray([0, 1, 2], dims=['abc'])
+        new_coord = DataArray([1, 2, 3], dims=['abc'], coords=[[1, 2, 3]])
+        arr['abc'] = new_coord
+        expected = DataArray([0, 1, 2], coords=[('abc', [1, 2, 3])])
+        self.assertDataArrayIdentical(arr, expected)
+
     def test_reindex(self):
         foo = self.dv
         bar = self.dv[:2, :2]
@@ -634,6 +650,13 @@ class TestDataArray(TestCase):
         time2 = DataArray(np.arange(5), dims="time2")
         actual = expected.reindex(time=time2)
         self.assertDataArrayIdentical(actual, expected)
+
+        # regression test for #736, reindex can not change complex nums dtype
+        x = np.array([1, 2, 3], dtype=np.complex)
+        x = DataArray(x, coords=[[0.1, 0.2, 0.3]])
+        y = DataArray([2, 5, 6, 7, 8], coords=[[-1.1, 0.21, 0.31, 0.41, 0.51]])
+        re_dtype = x.reindex_like(y, method='pad').dtype
+        self.assertEqual(x.dtype, re_dtype)
 
     def test_reindex_method(self):
         x = DataArray([10, 20], dims='y')
@@ -716,8 +739,19 @@ class TestDataArray(TestCase):
         expected = DataArray(np.ones(4), [('x', [1, 2, 3, 4])])
         self.assertDataArrayIdentical(a - b, expected)
 
-        with self.assertRaisesRegexp(ValueError, 'no overlapping labels'):
-            a.isel(x=slice(2)) + a.isel(x=slice(2, None))
+    def test_non_overlapping_dataarrays_return_empty_result(self):
+
+        a = DataArray(range(5), [('x', range(5))])
+        b = DataArray(range(5), [('x', range(1, 6))])
+        result = a.isel(x=slice(2)) + a.isel(x=slice(2, None))
+        self.assertEqual(len(result['x']), 0)
+
+    def test_empty_dataarrays_return_empty_result(self):
+
+        a = DataArray(data=[])
+        result = a * a
+        self.assertEqual(len(result['dim_0']), 0)
+
 
     def test_inplace_math_basics(self):
         x = self.x
@@ -1210,6 +1244,119 @@ class TestDataArray(TestCase):
         expected = array  # should be a no-op
         self.assertDataArrayIdentical(expected, actual)
 
+    def make_rolling_example_array(self):
+        times = pd.date_range('2000-01-01', freq='1D', periods=21)
+        values = np.random.random((21, 4))
+        da = DataArray(values, dims=('time', 'x'))
+        da['time'] = times
+
+        return da
+
+    def test_rolling_iter(self):
+        da = self.make_rolling_example_array()
+
+        rolling_obj = da.rolling(time=7)
+
+        self.assertEqual(len(rolling_obj.window_labels), len(da['time']))
+        self.assertDataArrayIdentical(rolling_obj.window_labels, da['time'])
+
+        for i, (label, window_da) in enumerate(rolling_obj):
+            self.assertEqual(label, da['time'].isel(time=i))
+
+    def test_rolling_properties(self):
+        da = self.make_rolling_example_array()
+        rolling_obj = da.rolling(time=4)
+
+        self.assertEqual(rolling_obj._axis_num, 0)
+
+        # catching invalid args
+        with self.assertRaisesRegexp(ValueError, 'exactly one dim/window should'):
+            da.rolling(time=7, x=2)
+        with self.assertRaisesRegexp(ValueError, 'window must be > 0'):
+            da.rolling(time=-2)
+        with self.assertRaisesRegexp(ValueError, 'min_periods must be greater'):
+            da.rolling(time=2, min_periods=0)
+
+    @requires_bottleneck
+    def test_rolling_wrapped_bottleneck(self):
+        import bottleneck as bn
+
+        da = self.make_rolling_example_array()
+
+        # Test all bottleneck functions
+        rolling_obj = da.rolling(time=7)
+        for name in ('sum', 'mean', 'std', 'min', 'max', 'median'):
+            func_name = 'move_{0}'.format(name)
+            actual = getattr(rolling_obj, name)()
+            expected = getattr(bn, func_name)(da.values, window=7, axis=0)
+            self.assertArrayEqual(actual.values, expected)
+
+        # Using min_periods
+        rolling_obj = da.rolling(time=7, min_periods=1)
+        for name in ('sum', 'mean', 'std', 'min', 'max'):
+            func_name = 'move_{0}'.format(name)
+            actual = getattr(rolling_obj, name)()
+            expected = getattr(bn, func_name)(da.values, window=7, axis=0,
+                                              min_count=1)
+            self.assertArrayEqual(actual.values, expected)
+
+        # Using center=False
+        rolling_obj = da.rolling(time=7, center=False)
+        for name in ('sum', 'mean', 'std', 'min', 'max', 'median'):
+            actual = getattr(rolling_obj, name)()['time']
+            self.assertDataArrayEqual(actual, da['time'])
+
+        # Using center=True
+        rolling_obj = da.rolling(time=7, center=True)
+        for name in ('sum', 'mean', 'std', 'min', 'max', 'median'):
+            actual = getattr(rolling_obj, name)()['time']
+            self.assertDataArrayEqual(actual, da['time'])
+
+        # catching invalid args
+        with self.assertRaisesRegexp(ValueError, 'Rolling.median does not'):
+            da.rolling(time=7, min_periods=1).median()
+
+    def test_rolling_pandas_compat(self):
+        s = pd.Series(range(10))
+        da = DataArray.from_series(s)
+
+        for center in (False, True):
+            for window in [1, 2, 3, 4]:
+                for min_periods in [None, 1, 2, 3]:
+                    if min_periods is not None and window < min_periods:
+                        min_periods = window
+                    s_rolling = pd.rolling_mean(s, window, center=center,
+                                                min_periods=min_periods)
+                    da_rolling = da.rolling(index=window, center=center,
+                                            min_periods=min_periods).mean()
+                    # pandas does some fancy stuff in the last position,
+                    # we're not going to do that yet!
+                    np.testing.assert_allclose(s_rolling.values[:-1],
+                                               da_rolling.values[:-1])
+                    np.testing.assert_allclose(s_rolling.index,
+                                               da_rolling['index'])
+
+    def test_rolling_reduce(self):
+        da = self.make_rolling_example_array()
+        for da in [self.make_rolling_example_array(),
+                   DataArray([0, np.nan, 1, 2, np.nan, 3, 4, 5, np.nan, 6, 7],
+                             dims='time')]:
+            for center in (False, True):
+                for window in [1, 2, 3, 4]:
+                    for min_periods in [None, 1, 2, 3]:
+                        if min_periods is not None and window < min_periods:
+                            min_periods = window
+                        # we can use this rolling object for all methods below
+                        rolling_obj = da.rolling(time=window, center=center,
+                                                 min_periods=min_periods)
+                        for name in ['sum', 'mean', 'min', 'max']:
+                            # add nan prefix to numpy methods to get similar
+                            # behavior as bottleneck
+                            actual = rolling_obj.reduce(
+                                getattr(np, 'nan%s' % name))
+                            expected = getattr(rolling_obj, name)()
+                            self.assertDataArrayAllClose(actual, expected)
+
     def test_resample(self):
         times = pd.date_range('2000-01-01', freq='6H', periods=10)
         array = DataArray(np.arange(10), [('time', times)])
@@ -1218,7 +1365,7 @@ class TestDataArray(TestCase):
         self.assertDataArrayIdentical(array, actual)
 
         actual = array.resample('24H', dim='time')
-        expected = DataArray(array.to_series().resample('24H'))
+        expected = DataArray(array.to_series().resample('24H', how='mean'))
         self.assertDataArrayIdentical(expected, actual)
 
         actual = array.resample('24H', dim='time', how=np.mean)
@@ -1526,9 +1673,23 @@ class TestDataArray(TestCase):
         self.assertDataArrayIdentical(array, roundtripped)
 
         array = DataArray([1, 2, 3], dims='x')
-        expected = Dataset(OrderedDict([('0', 1), ('1', 2), ('2', 3)]))
+        expected = Dataset(OrderedDict([(0, 1), (1, 2), (2, 3)]))
         actual = array.to_dataset('x')
         self.assertDatasetIdentical(expected, actual)
+
+    def test_to_dataset_retains_keys(self):
+
+        # use dates as convenient non-str objects. Not a specific date test
+        import datetime
+        dates = [datetime.date(2000,1,d) for d in range(1,4)]
+
+        array = DataArray([1, 2, 3], coords=[('x', dates)],
+                          attrs={'a': 1})
+
+        # convert to dateset and back again
+        result = array.to_dataset('x').to_array(dim='x')
+
+        self.assertDatasetEqual(array, result)
 
     def test__title_for_slice(self):
         array = DataArray(np.ones((4, 3, 2)), dims=['a', 'b', 'c'])
@@ -1597,3 +1758,75 @@ class TestDataArray(TestCase):
             array.foo = 2
         with self.assertRaisesRegexp(AttributeError, 'cannot set attr'):
             array.other = 2
+
+    def test_full_like(self):
+        da = DataArray(np.random.random(size=(4, 4)), dims=('x', 'y'),
+                       attrs={'attr1': 'value1'})
+        actual = _full_like(da)
+
+        self.assertEqual(actual.dtype, da.dtype)
+        self.assertEqual(actual.shape, da.shape)
+        self.assertEqual(actual.dims, da.dims)
+        self.assertEqual(actual.attrs, {})
+
+        for name in da.coords:
+            self.assertArrayEqual(da[name], actual[name])
+            self.assertEqual(da[name].dtype, actual[name].dtype)
+
+        # keep attrs
+        actual = _full_like(da, keep_attrs=True)
+        self.assertEqual(actual.attrs, da.attrs)
+
+        # Fill value
+        actual = _full_like(da, fill_value=True)
+        self.assertEqual(actual.dtype, da.dtype)
+        self.assertEqual(actual.shape, da.shape)
+        self.assertEqual(actual.dims, da.dims)
+        np.testing.assert_equal(actual.values, np.nan)
+
+        actual = _full_like(da, fill_value=10)
+        self.assertEqual(actual.dtype, da.dtype)
+        np.testing.assert_equal(actual.values, 10)
+
+        # make sure filling with nans promotes integer type
+        actual = _full_like(DataArray([1, 2, 3]), fill_value=np.nan)
+        self.assertEqual(actual.dtype, np.float)
+        np.testing.assert_equal(actual.values, np.nan)
+    
+    def test_dot(self):
+        x = np.linspace(-3, 3, 6)
+        y = np.linspace(-3, 3, 5)
+        z = range(4) 
+        da_vals = np.arange(6 * 5 * 4).reshape((6, 5, 4))
+        da = DataArray(da_vals, coords=[x, y, z], dims=['x', 'y', 'z'])
+        
+        dm_vals = range(4)
+        dm = DataArray(dm_vals, coords=[z], dims=['z'])
+        
+        # nd dot 1d
+        actual = da.dot(dm)
+        expected_vals = np.tensordot(da_vals, dm_vals, [2, 0])
+        expected = DataArray(expected_vals, coords=[x, y], dims=['x', 'y'])
+        self.assertDataArrayEqual(expected, actual)
+        
+        # all shared dims
+        actual = da.dot(da)
+        expected_vals = np.tensordot(da_vals, da_vals, axes=([0, 1, 2], [0, 1, 2]))
+        expected = DataArray(expected_vals)
+        self.assertDataArrayEqual(expected, actual)
+        
+        # multiple shared dims
+        dm_vals = np.arange(20 * 5 * 4).reshape((20, 5, 4))
+        j = np.linspace(-3, 3, 20)
+        dm = DataArray(dm_vals, coords=[j, y, z], dims=['j', 'y', 'z'])
+        actual = da.dot(dm)
+        expected_vals = np.tensordot(da_vals, dm_vals, axes=([1, 2], [1, 2]))
+        expected = DataArray(expected_vals, coords=[x, j], dims=['x', 'j'])
+        self.assertDataArrayEqual(expected, actual)
+        
+        with self.assertRaises(NotImplementedError):
+            da.dot(dm.to_dataset(name='dm'))
+        with self.assertRaises(TypeError):
+            da.dot(dm.values)
+        with self.assertRaisesRegexp(ValueError, 'no shared dimensions'):
+            da.dot(DataArray(1))

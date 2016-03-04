@@ -263,6 +263,11 @@ class Dataset(Mapping, ImplementsDatasetReduce, BaseDataObject):
         """
         _assert_empty([k for k in vars if k in coords],
                       'redundant variables and coordinates: %s')
+
+        # Need to coerce Series to a dict as it doesn't implement __iter__ like a mapping
+        # GH470
+        vars = dict(vars) if isinstance(vars, pd.Series) else vars
+
         variables = ChainMap(vars, coords)
 
         aligned = align_variables(variables)
@@ -1233,7 +1238,7 @@ class Dataset(Mapping, ImplementsDatasetReduce, BaseDataObject):
         ----------
         name_dict : dict-like
             Dictionary whose keys are current variable or dimension names and
-            whose values are new names.
+            whose values are the desired names.
         inplace : bool, optional
             If True, rename variables and dimensions in-place. Otherwise,
             return a new dataset object.
@@ -1253,7 +1258,7 @@ class Dataset(Mapping, ImplementsDatasetReduce, BaseDataObject):
             if k not in self:
                 raise ValueError("cannot rename %r because it is not a "
                                  "variable in this dataset" % k)
-            if v in self:
+            if v in self and k != v:
                 raise ValueError('the new name %r already exists' % v)
 
         variables = OrderedDict()
@@ -1915,7 +1920,7 @@ class Dataset(Mapping, ImplementsDatasetReduce, BaseDataObject):
             shape = -1
 
         for name, series in iteritems(dataframe):
-            data = series.values.reshape(shape)
+            data = np.asarray(series).reshape(shape)
             obj[name] = (dims, data)
         return obj
 
@@ -1932,19 +1937,15 @@ class Dataset(Mapping, ImplementsDatasetReduce, BaseDataObject):
         return func
 
     @staticmethod
-    def _binary_op(f, reflexive=False, join='inner', drop_na_vars=True):
+    def _binary_op(f, reflexive=False, join='inner', fillna=False):
         @functools.wraps(f)
         def func(self, other):
             if isinstance(other, groupby.GroupBy):
                 return NotImplemented
             if hasattr(other, 'indexes'):
                 self, other = align(self, other, join=join, copy=False)
-                empty_indexes = [d for d, s in self.dims.items() if s == 0]
-                if empty_indexes:
-                    raise ValueError('no overlapping labels for some '
-                                     'dimensions: %s' % empty_indexes)
             g = f if not reflexive else lambda x, y: f(y, x)
-            ds = self._calculate_binary_op(g, other, drop_na_vars=drop_na_vars)
+            ds = self._calculate_binary_op(g, other, fillna=fillna)
             return ds
         return func
 
@@ -1965,27 +1966,25 @@ class Dataset(Mapping, ImplementsDatasetReduce, BaseDataObject):
             return self
         return func
 
-    def _calculate_binary_op(self, f, other, inplace=False, drop_na_vars=True):
+    def _calculate_binary_op(self, f, other, inplace=False, fillna=False):
 
         def apply_over_both(lhs_data_vars, rhs_data_vars, lhs_vars, rhs_vars):
+            if fillna and not set(rhs_data_vars) <= set(lhs_data_vars):
+                raise ValueError('all variables in the argument to `fillna` '
+                                 'must be contained in the original dataset')
+
             dest_vars = OrderedDict()
-            performed_op = False
             for k in lhs_data_vars:
                 if k in rhs_data_vars:
                     dest_vars[k] = f(lhs_vars[k], rhs_vars[k])
-                    performed_op = True
                 elif inplace:
                     raise ValueError(
                         'datasets must have the same data variables '
                         'for in-place arithmetic operations: %s, %s'
                         % (list(lhs_data_vars), list(rhs_data_vars)))
-                elif not drop_na_vars:
+                elif fillna:
                     # this shortcuts left alignment of variables for fillna
                     dest_vars[k] = lhs_vars[k]
-            if not performed_op:
-                raise ValueError(
-                    'datasets have no overlapping data variables: %s, %s'
-                    % (list(lhs_data_vars), list(rhs_data_vars)))
             return dest_vars
 
         if utils.is_dict_like(other) and not isinstance(other, Dataset):

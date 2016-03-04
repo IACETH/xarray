@@ -217,6 +217,7 @@ class TestDataset(TestCase):
     def test_constructor_pandas_single(self):
 
         das = [
+            DataArray(np.random.rand(4), dims=['a']),  # series
             DataArray(np.random.rand(4,3), dims=['a', 'b']),  # df
             DataArray(np.random.rand(4,3,2), dims=['a','b','c']), # panel
             ]
@@ -1101,6 +1102,12 @@ class TestDataset(TestCase):
         with self.assertRaises(UnexpectedDataAccess):
             renamed['renamed_var1'].values
 
+    def test_rename_same_name(self):
+        data = create_test_data()
+        newnames = {'var1': 'var1', 'dim2': 'dim2'}
+        renamed = data.rename(newnames)
+        self.assertDatasetIdentical(renamed, data)
+
     def test_rename_inplace(self):
         times = pd.date_range('2000-01-01', periods=3)
         data = Dataset({'z': ('x', [2, 3, 4]), 't': ('t', times)})
@@ -1614,7 +1621,7 @@ class TestDataset(TestCase):
 
         ds = Dataset({'x': ('time', np.arange(100)),
                       'time': pd.date_range('2000-01-01', periods=100)})
-        with self.assertRaisesRegexp(ValueError, 'no overlapping labels'):
+        with self.assertRaisesRegexp(ValueError, 'incompat.* grouped binary'):
             ds + ds.groupby('time.month')
 
     def test_groupby_math_virtual(self):
@@ -1716,7 +1723,6 @@ class TestDataset(TestCase):
         expected = Dataset({'A': DataArray([], dims=('index',))})
         self.assertDatasetIdentical(expected, actual)
 
-
         # regression test for GH278
         # use int64 to ensure consistent results for the pandas .equals method
         # on windows (which requires the same dtype)
@@ -1735,11 +1741,36 @@ class TestDataset(TestCase):
         expected = pd.DataFrame([[]], index=idx)
         assert expected.equals(actual), (expected, actual)
 
+    def test_from_dataframe_non_unique_columns(self):
         # regression test for GH449
         df = pd.DataFrame(np.zeros((2, 2)))
         df.columns = ['foo', 'foo']
         with self.assertRaisesRegexp(ValueError, 'non-unique columns'):
             Dataset.from_dataframe(df)
+
+    def test_convert_dataframe_with_many_types_and_multiindex(self):
+        # regression test for GH737
+        df = pd.DataFrame({'a': list('abc'),
+                           'b': list(range(1, 4)),
+                           'c': np.arange(3, 6).astype('u1'),
+                           'd': np.arange(4.0, 7.0, dtype='float64'),
+                           'e': [True, False, True],
+                           'f': pd.Categorical(list('abc')),
+                           'g': pd.date_range('20130101', periods=3),
+                           'h': pd.date_range('20130101',
+                                              periods=3,
+                                              tz='US/Eastern')})
+        df.index = pd.MultiIndex.from_product([['a'], range(3)],
+                                              names=['one', 'two'])
+        roundtripped = Dataset.from_dataframe(df).to_dataframe()
+        # we can't do perfectly, but we should be at least as faithful as
+        # np.asarray
+        expected = df.apply(np.asarray)
+        if pd.__version__ < '0.17':
+            # datetime with timezone dtype is not consistent on old pandas
+            roundtripped = roundtripped.drop(['h'], axis=1)
+            expected = expected.drop(['h'], axis=1)
+        assert roundtripped.equals(expected)
 
     def test_pickle(self):
         data = create_test_data()
@@ -1856,17 +1887,23 @@ class TestDataset(TestCase):
         actual = ds.fillna(b[:3])
         self.assertDatasetIdentical(expected, actual)
 
-        # left align variables
+        # okay to only include some data variables
         ds['b'] = np.nan
-        actual = ds.fillna({'a': -1, 'c': 'foobar'})
+        actual = ds.fillna({'a': -1})
         expected = Dataset({'a': ('x', [-1, 1, -1, 3]), 'b': np.nan})
         self.assertDatasetIdentical(expected, actual)
 
-        with self.assertRaisesRegexp(ValueError, 'no overlapping'):
+        # but new data variables is not okay
+        with self.assertRaisesRegexp(ValueError, 'must be contained'):
             ds.fillna({'x': 0})
 
-        with self.assertRaisesRegexp(ValueError, 'no overlapping'):
-            ds.fillna(Dataset(coords={'a': 0}))
+        # empty argument should be OK
+        result = ds.fillna({})
+        self.assertDatasetIdentical(ds, result)
+
+        result = ds.fillna(Dataset(coords={'c': 42}))
+        expected = ds.assign_coords(c=42)
+        self.assertDatasetIdentical(expected, result)
 
         # groupby
         expected = Dataset({'a': ('x', range(4))})
@@ -2176,22 +2213,20 @@ class TestDataset(TestCase):
         actual = ds + subset
         self.assertDatasetIdentical(expected, actual)
 
-        with self.assertRaisesRegexp(ValueError, 'no overlapping labels'):
-            ds.isel(x=slice(1)) + ds.isel(x=slice(1, None))
+
+        actual = ds.isel(x=slice(1)) + ds.isel(x=slice(1, None))
+        expected = ds.drop(ds.x, dim='x')
+        self.assertDatasetEqual(actual, expected)
 
         actual = ds + ds[['bar']]
         expected = (2 * ds[['bar']]).merge(ds.coords)
         self.assertDatasetIdentical(expected, actual)
 
-        with self.assertRaisesRegexp(ValueError, 'no overlapping data'):
-            ds + Dataset()
-
-        with self.assertRaisesRegexp(ValueError, 'no overlapping data'):
-            Dataset() + Dataset()
+        self.assertDatasetIdentical(ds + Dataset(), ds.coords.to_dataset())
+        self.assertDatasetIdentical(Dataset() + Dataset(), Dataset())
 
         ds2 = Dataset(coords={'bar': 42})
-        with self.assertRaisesRegexp(ValueError, 'no overlapping data'):
-            ds + ds2
+        self.assertDatasetIdentical(ds + ds2, ds.coords.merge(ds2))
 
         # maybe unary arithmetic with empty datasets should raise instead?
         self.assertDatasetIdentical(Dataset() + 1, Dataset())
@@ -2252,6 +2287,15 @@ class TestDataset(TestCase):
             ds.transpose('dim1', 'dim2', 'dim3')
         with self.assertRaisesRegexp(ValueError, 'arguments to transpose'):
             ds.transpose('dim1', 'dim2', 'dim3', 'time', 'extra_dim')
+
+    def test_dataset_retains_period_index_on_transpose(self):
+
+        ds = create_test_data()
+        ds['time'] = pd.period_range('2000-01-01', periods=20)
+
+        transposed = ds.transpose()
+
+        self.assertIsInstance(transposed.time.to_index(), pd.PeriodIndex)
 
     def test_dataset_diff_n1_simple(self):
         ds = Dataset({'foo': ('x', [5, 5, 6, 6])})

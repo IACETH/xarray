@@ -17,6 +17,7 @@ Top-level functions
    align
    broadcast
    concat
+   empty_like
    set_options
 
 Dataset
@@ -143,6 +144,7 @@ Computation
 :py:attr:`~Dataset.round`
 :py:attr:`~Dataset.real`
 :py:attr:`~Dataset.T`
+:py:attr:`~DataArray.dot`
 
 **Grouped operations**:
 :py:attr:`~core.groupby.DatasetGroupBy.assign`
@@ -245,6 +247,7 @@ Computation
 
    DataArray.reduce
    DataArray.groupby
+   DataArray.rolling
    DataArray.resample
    DataArray.get_axis_num
    DataArray.diff

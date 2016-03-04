@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
 
-from .pycompat import basestring, iteritems, suppress
+from .pycompat import basestring, iteritems, suppress, dask_array_type
 from . import formatting
-from .utils import SortedKeysDict
+from .utils import SortedKeysDict, not_implemented
 
 
 class ImplementsArrayReduce(object):
@@ -50,6 +50,63 @@ class ImplementsDatasetReduce(object):
         """dim : str or sequence of str, optional
             Dimension(s) over which to apply `func`.  By default `func` is
             applied over all dimensions."""
+
+
+class ImplementsRollingArrayReduce(object):
+    @classmethod
+    def _reduce_method(cls, func):
+        def wrapped_func(self, **kwargs):
+            return self.reduce(func, **kwargs)
+        return wrapped_func
+
+    @classmethod
+    def _bottleneck_reduce(cls, func):
+        def wrapped_func(self, **kwargs):
+            from .dataarray import DataArray
+
+            if isinstance(self.obj.data, dask_array_type):
+                raise NotImplementedError(
+                    'Rolling window operation does not work with dask arrays')
+
+            # bottleneck doesn't allow min_count to be 0, although it should
+            # work the same as if min_count = 1
+            if self.min_periods is not None and self.min_periods == 0:
+                min_count = self.min_periods + 1
+            else:
+                min_count = self.min_periods
+
+            values = func(self.obj.data, window=self.window,
+                          min_count=min_count, axis=self._axis_num)
+
+            result = DataArray(values, self.obj.coords)
+
+            if self.center:
+                result = self._center_result(result)
+
+            return result
+        return wrapped_func
+
+    @classmethod
+    def _bottleneck_reduce_without_min_count(cls, func):
+        def wrapped_func(self, **kwargs):
+            from .dataarray import DataArray
+
+            if self.min_periods is not None:
+                raise ValueError('Rolling.median does not accept min_periods')
+
+            if isinstance(self.obj.data, dask_array_type):
+                raise NotImplementedError(
+                    'Rolling window operation does not work with dask arrays')
+
+            values = func(self.obj.data, window=self.window, axis=self._axis_num)
+
+            result = DataArray(values, self.obj.coords)
+
+            if self.center:
+                result = self._center_result(result)
+
+            return result
+        return wrapped_func
 
 
 class AbstractArray(ImplementsArrayReduce):
@@ -286,6 +343,33 @@ class BaseDataObject(AttrAccessMixin):
             group = self[group]
         return self.groupby_cls(self, group, squeeze=squeeze)
 
+    def rolling(self, min_periods=None, center=False, **windows):
+        """
+        Moving window object.
+
+        Parameters
+        ----------
+        min_periods : int, default None
+            Minimum number of observations in window required to have a value
+            (otherwise result is NA). The default, None, is equivalent to
+            setting min_periods equal to the size of the window.
+        center : boolean, default False
+            Set the labels at the center of the window.
+        **windows : dim=window
+            dim : str
+                Name of the dimension to create the rolling iterator
+                along (e.g., `time`).
+            window : int
+                Size of the moving window.
+
+        Returns
+        -------
+        rolling : type of input argument
+        """
+
+        return self.rolling_cls(self, min_periods=min_periods,
+                                center=center, **windows)
+
     def resample(self, freq, dim, how='mean', skipna=None, closed=None,
                  label=None, base=0):
         """Resample this object to a new temporal resolution.
@@ -395,6 +479,12 @@ class BaseDataObject(AttrAccessMixin):
         """
         return self._where(cond)
 
+    # this has no runtime function - these are listed so IDEs know these methods
+    # are defined and don't warn on these operations
+    __lt__ = __le__ =__ge__ = __gt__ = __add__ = __sub__ = __mul__ = \
+    __truediv__ = __floordiv__ = __mod__ = __pow__ = __and__  = __xor__ = \
+    __or__ = __div__ = __eq__ = __ne__ = not_implemented
+
 
 def squeeze(xarray_obj, dims, dim=None):
     """Squeeze the dims of an xarray object."""
@@ -418,6 +508,8 @@ def _maybe_promote(dtype):
         # convert to floating point so NaN is valid
         dtype = float
         fill_value = np.nan
+    elif np.issubdtype(dtype, complex):
+        fill_value = np.nan + np.nan * 1j
     elif np.issubdtype(dtype, np.datetime64):
         fill_value = np.datetime64('NaT')
     elif np.issubdtype(dtype, np.timedelta64):
@@ -433,3 +525,64 @@ def _possibly_convert_objects(values):
     datetime64 and timedelta64, according to the pandas convention.
     """
     return np.asarray(pd.Series(values.ravel())).reshape(values.shape)
+
+
+def _get_fill_value(dtype):
+    """Return a fill value that appropriately promotes types when used with
+    np.concatenate
+    """
+    _, fill_value = _maybe_promote(dtype)
+    return fill_value
+
+
+def _full_like_dataarray(arr, keep_attrs=False, fill_value=None):
+    """empty DataArray"""
+    from .dataarray import DataArray
+
+    attrs = arr.attrs if keep_attrs else {}
+
+    if fill_value is None:
+        values = np.empty_like(arr)
+    elif fill_value is True:
+        dtype, fill_value = _maybe_promote(arr.dtype)
+        values = np.full_like(arr, fill_value=fill_value, dtype=dtype)
+    else:
+        dtype, _ = _maybe_promote(np.array(fill_value).dtype)
+        values = np.full_like(arr, fill_value=fill_value, dtype=dtype)
+
+    return DataArray(values, dims=arr.dims, coords=arr.coords, attrs=attrs)
+
+
+def _full_like(xray_obj, keep_attrs=False, fill_value=None):
+    """Return a new object with the same shape and type as a given object.
+
+    Parameters
+    ----------
+    xray_obj : DataArray or Dataset
+        Return a full object with the same shape/dims/coords/attrs.
+            `func` is calculated over all dimension for each group item.
+    keep_attrs : bool, optional
+        If True, the datasets's attributes (`attrs`) will be copied from
+        the original object to the new one.  If False (default), the new
+        object will be returned without attributes.
+    fill_value : scalar, optional
+        Value to fill DataArray(s) with before returning.
+
+    Returns
+    -------
+    out : same as xray_obj
+        New object with the same shape and type as a given object.
+    """
+    from .dataarray import DataArray
+    from .dataset import Dataset
+
+    if isinstance(xray_obj, Dataset):
+        attrs = xray_obj.attrs if keep_attrs else {}
+
+        return Dataset(dict((k, _full_like_dataarray(v, keep_attrs=keep_attrs,
+                                                     fill_value=fill_value))
+                            for k, v in iteritems(xray_obj.data_vars)),
+                       name=xray_obj.name, attrs=attrs)
+    elif isinstance(xray_obj, DataArray):
+        return _full_like_dataarray(xray_obj, keep_attrs=keep_attrs,
+                                    fill_value=fill_value)

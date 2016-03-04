@@ -17,9 +17,11 @@ from .nputils import (
 
 try:
     import bottleneck as bn
+    has_bottleneck = True
 except ImportError:
     # use numpy methods instead
     bn = np
+    has_bottleneck = False
 
 try:
     import dask.array as da
@@ -46,6 +48,9 @@ PANDAS_UNARY_FUNCTIONS = ['isnull', 'notnull']
 REDUCE_METHODS = ['all', 'any']
 NAN_REDUCE_METHODS = ['argmax', 'argmin', 'max', 'min', 'mean', 'prod', 'sum',
                       'std', 'var', 'median']
+BOTTLENECK_ROLLING_METHODS = {'move_sum': 'sum', 'move_mean': 'mean',
+                              'move_std': 'std', 'move_min': 'min',
+                              'move_max': 'max'}
 # TODO: wrap cumprod/cumsum, take, dot, sort
 
 
@@ -91,6 +96,8 @@ stack = _dask_or_eager_func('stack', npcompat, list_of_args=True)
 
 array_all = _dask_or_eager_func('all')
 array_any = _dask_or_eager_func('any')
+
+tensordot = _dask_or_eager_func('tensordot', n_array_args=2)
 
 
 def _interleaved_indices_required(indices):
@@ -252,6 +259,21 @@ _REDUCE_DOCSTRING_TEMPLATE = \
         reduced : {cls}
             New {cls} object with `{name}` applied to its data and the
             indicated dimension(s) removed.
+        """
+
+_ROLLING_REDUCE_DOCSTRING_TEMPLATE = \
+        """Reduce this DataArrayRolling's data windows by applying `{name}`
+        along its dimension.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Additional keyword arguments passed on to `{name}`.
+
+        Returns
+        -------
+        reduced : DataArray
+            New DataArray object with `{name}` applied along its rolling dimnension.
         """
 
 
@@ -421,7 +443,7 @@ def inject_binary_ops(cls, inplace=False):
 
     # patch in fillna
     f = _func_slash_method_wrapper(fillna)
-    method = cls._binary_op(f, join='left', drop_na_vars=False)
+    method = cls._binary_op(f, join='left', fillna=True)
     setattr(cls, '_fillna', method)
 
     # patch in where
@@ -465,3 +487,29 @@ def inject_all_ops_and_reduce_methods(cls, priority=50, array_only=True):
             setattr(cls, name, _values_method_wrapper(name))
 
     inject_reduce_methods(cls)
+
+
+def inject_bottleneck_rolling_methods(cls):
+    # standard numpy reduce methods
+    methods = [(name, globals()[name]) for name in NAN_REDUCE_METHODS]
+    for name, f in methods:
+        func = cls._reduce_method(f)
+        func.__name__ = name
+        func.__doc__ = _ROLLING_REDUCE_DOCSTRING_TEMPLATE.format(name=func.__name__)
+        setattr(cls, name, func)
+
+    # bottleneck rolling methods
+    if has_bottleneck:
+        for bn_name, method_name in BOTTLENECK_ROLLING_METHODS.items():
+            f = getattr(bn, bn_name)
+            func = cls._bottleneck_reduce(f)
+            func.__name__ = method_name
+            func.__doc__ = _ROLLING_REDUCE_DOCSTRING_TEMPLATE.format(name=func.__name__)
+            setattr(cls, method_name, func)
+
+        # bottleneck rolling methods without min_count
+        f = getattr(bn, 'move_median')
+        func = cls._bottleneck_reduce_without_min_count(f)
+        func.__name__ = 'median'
+        func.__doc__ = _ROLLING_REDUCE_DOCSTRING_TEMPLATE.format(name=func.__name__)
+        setattr(cls, 'median', func)
