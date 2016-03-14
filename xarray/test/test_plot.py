@@ -8,8 +8,8 @@ from xarray import DataArray
 import xarray.plot as xplt
 from xarray.plot.plot import _infer_interval_breaks
 from xarray.plot.utils import (_determine_cmap_params,
-                             _build_discrete_cmap,
-                             _color_palette)
+                               _build_discrete_cmap,
+                               _color_palette)
 
 from . import TestCase, requires_matplotlib, incompatible_2_6
 
@@ -588,6 +588,32 @@ class Common2dMixin:
         self.assertIn('y', self.darray.coords)
         self.plotmethod(y='y', x='x')
 
+    def test_non_linked_coords(self):
+        # plot with coordinate names that are not dimensions
+        self.darray.coords['newy'] = self.darray.y + 150
+        # Normal case, without transpose
+        self.plotfunc(self.darray, x='x', y='newy')
+        ax = plt.gca()
+        self.assertEqual('x', ax.get_xlabel())
+        self.assertEqual('newy', ax.get_ylabel())
+        # ax limits might change bewteen plotfuncs
+        # simply ensure that these high coords were passed over
+        self.assertTrue(np.min(ax.get_ylim()) > 100.)
+
+    def test_non_linked_coords_transpose(self):
+        # plot with coordinate names that are not dimensions,
+        # and with transposed y and x axes
+        # This used to raise an error with pcolormesh and contour
+        # https://github.com/pydata/xarray/issues/788
+        self.darray.coords['newy'] = self.darray.y + 150
+        self.plotfunc(self.darray, x='newy', y='x')
+        ax = plt.gca()
+        self.assertEqual('newy', ax.get_xlabel())
+        self.assertEqual('x', ax.get_ylabel())
+        # ax limits might change bewteen plotfuncs
+        # simply ensure that these high coords were passed over
+        self.assertTrue(np.min(ax.get_xlim()) > 100.)
+
     def test_default_title(self):
         a = DataArray(easy_array((4, 3, 2)), dims=['a', 'b', 'c'])
         a.coords['d'] = u'foo'
@@ -772,6 +798,16 @@ class TestPcolormesh(Common2dMixin, PlotTestCase):
         ax = plt.gca()
         self.assertEqual('x2d', ax.get_xlabel())
         self.assertEqual('y2d', ax.get_ylabel())
+
+    def test_dont_infer_interval_breaks_for_cartopy(self):
+        # Regression for GH 781
+        ax = plt.gca()
+        # Simulate a Cartopy Axis
+        setattr(ax, 'projection', True)
+        artist = self.plotmethod(x='x2d', y='y2d', ax=ax)
+        self.assertTrue(isinstance(artist, mpl.collections.QuadMesh))
+        # Let cartopy handle the axis limits and artist size
+        self.assertTrue(artist.get_array().size <= self.darray.size)
 
 
 class TestImshow(Common2dMixin, PlotTestCase):

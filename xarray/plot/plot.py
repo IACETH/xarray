@@ -396,7 +396,8 @@ def _plot2d(plotfunc):
         zval = darray.to_masked_array(copy=False)
 
         # May need to transpose for correct x, y labels
-        if xlab == darray.dims[0]:
+        # xlab may be the name of a coord, we have to check for dim names
+        if darray[xlab].dims[-1] == darray.dims[0]:
             zval = zval.T
 
         _ensure_plottable(xval, yval)
@@ -558,8 +559,10 @@ def pcolormesh(x, y, z, ax, **kwargs):
 
     Wraps matplotlib.pyplot.pcolormesh
     """
-    x = _infer_interval_breaks(x)
-    y = _infer_interval_breaks(y)
+
+    if not hasattr(ax, 'projection'):
+        x = _infer_interval_breaks(x)
+        y = _infer_interval_breaks(y)
 
     primitive = ax.pcolormesh(x, y, z, **kwargs)
 
