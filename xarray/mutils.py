@@ -206,10 +206,12 @@ def _wrap360(self, lon='lon'):
 
     # wrap -180..179 to 0..359   
 
-    # ds.coords[lon] = np.mod(ds[lon], 360)
-    self = self.assign_coords(**{lon: np.mod(self[lon], 360)})
+    
+    new_lon = np.mod(self[lon], 360)
+
+    self = self.assign_coords(**{lon: new_lon})
     # sort the data
-    return self.reindex({lon : np.sort(self[lon])})
+    return self.reindex(**{lon : np.sort(self[lon])})
 
 # =============================================================================
 
@@ -231,14 +233,20 @@ def _wrap180(self, lon='lon'):
     """
 
     # wrap 0..359 to -180..179
-    sel = self.lon > 180
+    new_lon = self[lon].data
 
-    lon = np.mod(self[lon][sel], -180)
+    # only modify values > 180
+    sel = new_lon > 180
     
-    self[lon][sel] = lon
+    if np.any(sel):
+        # 359 -> -1, 181 -> -179    
+        new_lon[sel] = np.mod(new_lon[sel], -180)
+        self = self.assign_coords(**{lon: new_lon})
+        # sort the data
 
-    # sort the data
-    return self.reindex({lon : np.sort(self[lon])})
+    self = self.reindex(**{lon : np.sort(self[lon])})
+    
+    return self
 
 # =============================================================================
 
