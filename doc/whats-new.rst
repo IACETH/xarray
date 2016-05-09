@@ -13,6 +13,39 @@ What's New
     import xarray as xr
     np.random.seed(123456)
 
+.. _whats-new.0.7.3:
+
+v0.7.3 (unreleased)
+-------------------
+
+This release includes
+
+Enhancements
+~~~~~~~~~~~~
+
+- DataArray and Dataset method :py:meth:`where` now supports a ``drop=True``
+  option that clips coordinate elements that are fully masked.  By
+  `Phillip J. Wolfram <https://github.com/pwolfram>`_.
+
+- DataArray and Dataset method :py:meth:`resample` now supports the
+  ``keep_attrs=False`` option that determines whether variable and dataset
+  attributes are retained in the resampled object. By
+  `Jeremy McGibbon <https://github.com/mcgibbon>`_.
+
+Bug fixes
+~~~~~~~~~
+
+- Attributes were being retained by default for some resampling
+  operations when they should not. With the ``keep_attrs=False`` option, they
+  will no longer be retained by default. This may be backwards-incompatible
+  with some scripts, but the attributes may be kept by adding the
+  ``keep_attrs=True`` option. By
+  `Jeremy McGibbon <https://github.com/mcgibbon>`_.
+
+- ``decode_cf_timedelta`` now accepts arrays with ``ndim`` >1 (:issue:`842`).
+   This fixes issue :issue:`665`.
+   `Filipe Fernandes <https://github.com/ocefpaf>`_.
+
 .. _whats-new.0.7.2:
 
 v0.7.2 (13 March 2016)
