@@ -18,15 +18,19 @@ def geocolormesh(x, y, z, ax, **kwargs):
 
     import cartopy.crs as ccrs
 
-    proj = kwargs.get('projection', ccrs.PlateCarree())
-    trans = kwargs.get('transform', ccrs.PlateCarree())
+    proj = kwargs.pop('projection', ccrs.PlateCarree())
+    trans = kwargs.pop('transform', ccrs.PlateCarree())
 
     x = _infer_interval_breaks(x)
     y = _infer_interval_breaks(y)
 
+    coastlines = kwargs.pop('coastlines', True)
+
     primitive = ax.pcolormesh(x, y, z, transform=trans, **kwargs)
 
-    ax.coastlines()
+
+    if coastlines:
+        ax.coastlines()
 
     xmin, xmax, ymin, ymax = x.min(), x.max(), y.min(), y.max()
     
